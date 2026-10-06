@@ -1,0 +1,64 @@
+name: FinMind API test
+on:
+  push:
+    paths: ['.github/workflows/finmind-test.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Test FinMind without exposing credentials
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import os, json, datetime, urllib.request, urllib.parse, urllib.error
+          from zoneinfo import ZoneInfo
+          token = os.environ.get('FINMIND_TOKEN', '').strip()
+          if not token:
+              print('SECRET_MISSING: FINMIND_TOKEN')
+              raise SystemExit(1)
+          print('SECRET_PRESENT: value is never printed')
+          today = datetime.datetime.now(ZoneInfo('Asia/Taipei')).date()
+          start = today - datetime.timedelta(days=7)
+          tests = [
+              ('TAIEX_DAILY', 'data', {'dataset':'TaiwanStockPrice','data_id':'TAIEX'}),
+              ('FUTURES_INSTITUTIONS', 'data', {'dataset':'TaiwanFuturesInstitutionalInvestors','data_id':'TX'}),
+              ('OPTIONS_INSTITUTIONS', 'data', {'dataset':'TaiwanOptionInstitutionalInvestors','data_id':'TXO'}),
+              ('TAIEX_SNAPSHOT', 'taiwan_stock_tick_snapshot', {'data_id':'001'}),
+          ]
+          lines = ['# FinMind API test', '', 'Taipei test time: ' + datetime.datetime.now(ZoneInfo('Asia/Taipei')).isoformat(), '']
+          for label, endpoint, params in tests:
+              if endpoint == 'data':
+                  params.update(start_date=start.isoformat(), end_date=today.isoformat())
+              request = urllib.request.Request('https://api.finmindtrade.com/api/v4/' + endpoint + '?' + urllib.parse.urlencode(params), headers={'Authorization':'Bearer ' + token})
+              result = {'test':label}
+              try:
+                  try:
+                      response = urllib.request.urlopen(request, timeout=30)
+                  except urllib.error.HTTPError as error:
+                      response = error
+                  result['http_status'] = response.status
+                  payload = json.loads(response.read(4000000))
+                  result['api_status'] = payload.get('status') if isinstance(payload.get('status'), (int,float)) else None
+                  rows = payload.get('data')
+                  result['rows'] = len(rows) if isinstance(rows,list) else 0
+                  message = str(payload.get('msg','')).lower()
+                  result['access_denied'] = any(w in message for w in ('sponsor','upgrade','permission','權限','升級'))
+                  result['credential_rejected'] = any(w in message for w in ('invalid token','unauthorized','token expired'))
+                  dates = [str(r.get('date','')) for r in (rows if isinstance(rows,list) else []) if isinstance(r,dict)]
+                  dates = [d for d in dates if d and len(d)<=40 and token not in d]
+                  result['latest_data_time'] = max(dates) if dates else None
+                  result['usable_response'] = response.status == 200 and payload.get('status') == 200 and result['rows'] > 0
+              except Exception as error:
+                  result['error_type'] = type(error).__name__
+              safe = json.dumps(result, ensure_ascii=False)
+              print(safe)
+              lines.append('- ' + safe)
+          lines += ['', 'Daily data success does not establish real-time access.', 'After-close snapshot success does not establish intraday freshness.', 'Connection test only; no trading signals or recurring notifications.']
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as report:
+              report.write(chr(10).join(lines) + chr(10))
+          PY
