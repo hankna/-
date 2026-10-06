@@ -15,7 +15,7 @@ jobs:
           FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
         run: |
           python3 - <<'PY'
-          import os, json, datetime, urllib.request, urllib.parse, urllib.error
+          import os, json, re, datetime, urllib.request, urllib.parse, urllib.error
           from zoneinfo import ZoneInfo
           token = os.environ.get('FINMIND_TOKEN', '').strip()
           if not token:
@@ -47,6 +47,9 @@ jobs:
                   rows = payload.get('data')
                   result['rows'] = len(rows) if isinstance(rows,list) else 0
                   message = str(payload.get('msg','')).lower()
+                  scrubbed = str(payload.get('msg','')).replace(token, '[REDACTED]')
+                  scrubbed = re.sub(r'[A-Za-z0-9_./+=-]{24,}', '[REDACTED]', scrubbed)
+                  result['message_redacted'] = scrubbed[:300]
                   result['access_denied'] = any(w in message for w in ('sponsor','upgrade','permission','權限','升級'))
                   result['credential_rejected'] = any(w in message for w in ('invalid token','unauthorized','token expired'))
                   dates = [str(r.get('date','')) for r in (rows if isinstance(rows,list) else []) if isinstance(r,dict)]
